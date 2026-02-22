@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import re
@@ -32,18 +33,9 @@ class YouTubeDownloader:
     def fetch_info(self) -> dict:
         """Fetch full video info using yt-dlp."""
         self._validate_url()
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36',
-            },
-        }
+        ydl_opts = self._base_ydl_opts()
+        self._apply_extractor_args(ydl_opts, ['web', 'android'])
+        self._apply_cookie_opts(ydl_opts)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             self.info = ydl.extract_info(self.url, download=False)
         return self.info
@@ -110,23 +102,15 @@ class YouTubeDownloader:
             if d['status'] == 'finished':
                 filename_collector.append(d['filename'])
 
-        ydl_opts = {
+        ydl_opts = self._base_ydl_opts()
+        ydl_opts.update({
             'format': f"{itag}+bestaudio/best",
             'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
             'progress_hooks': [logger_hook],
             'merge_output_format': 'mp4',
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36',
-            },
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([self.url])
+        })
+        self._apply_cookie_opts(ydl_opts)
+        self._download_with_clients(ydl_opts, [['web'], ['android']])
         
         return filename_collector[0] if filename_collector else ""
 
@@ -137,7 +121,8 @@ class YouTubeDownloader:
             if d['status'] == 'finished':
                 filename_collector.append(d['filename'])
 
-        ydl_opts = {
+        ydl_opts = self._base_ydl_opts()
+        ydl_opts.update({
             'format': 'bestaudio/best',
             'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
             'postprocessors': [{
@@ -146,17 +131,56 @@ class YouTubeDownloader:
                 'preferredquality': '192',
             }],
             'progress_hooks': [logger_hook],
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36',
-            },
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([self.url])
+        })
+        self._apply_cookie_opts(ydl_opts)
+        self._download_with_clients(ydl_opts, [['web'], ['android']])
         
         return filename_collector[0] if filename_collector else ""
+
+    @staticmethod
+    def _base_ydl_opts() -> dict:
+        return {
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.youtube.com/',
+                'Origin': 'https://www.youtube.com',
+            },
+        }
+
+    @staticmethod
+    def _apply_extractor_args(opts: dict, player_clients: List[str]) -> None:
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': player_clients,
+            }
+        }
+
+    @staticmethod
+    def _apply_cookie_opts(opts: dict) -> None:
+        cookie_file = os.getenv("YT_COOKIES_FILE")
+        cookies_from_browser = os.getenv("YT_COOKIES_FROM_BROWSER")
+        if cookie_file:
+            opts['cookiefile'] = cookie_file
+        if cookies_from_browser:
+            opts['cookiesfrombrowser'] = cookies_from_browser
+
+    def _download_with_clients(self, base_opts: dict, client_sets: List[List[str]]) -> None:
+        last_exc: Optional[Exception] = None
+        for client_list in client_sets:
+            attempt_opts = copy.deepcopy(base_opts)
+            self._apply_extractor_args(attempt_opts, client_list)
+            try:
+                with yt_dlp.YoutubeDL(attempt_opts) as ydl:
+                    ydl.download([self.url])
+                return
+            except yt_dlp.utils.DownloadError as exc:
+                last_exc = exc
+                if "HTTP Error 403" not in str(exc):
+                    raise
+        if last_exc:
+            raise last_exc
