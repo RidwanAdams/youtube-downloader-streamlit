@@ -21,10 +21,11 @@ class StreamOption:
 class YouTubeDownloader:
     """High-level YouTube downloader with best-effort high-res support."""
 
-    def __init__(self, url: str, logger: Optional[logging.Logger] = None, cache: Optional[Any] = None) -> None:
+    def __init__(self, url: str, logger: Optional[logging.Logger] = None, cache: Optional[Any] = None, client: str = 'MWEB') -> None:
         self.url = url
         self.logger = logger or logging.getLogger(__name__)
         self.cache = cache
+        self.client = client
 
     def _validate_url(self) -> None:
         if not isinstance(self.url, str) or not self.url:
@@ -34,7 +35,12 @@ class YouTubeDownloader:
         """Fetch available streams for the URL and return a sorted list."""
         self._validate_url()
         try:
-            yt = YouTube(self.url, on_progress_callback=None, on_complete_callback=None)  # type: ignore[arg-type]
+            yt = YouTube(
+                self.url, 
+                on_progress_callback=None, 
+                on_complete_callback=None,
+                client=self.client
+            )  # type: ignore[arg-type]
         except Exception as exc:
             self.logger.exception("Failed to initialize YouTube object for URL: %s", self.url)
             raise
@@ -89,7 +95,7 @@ class YouTubeDownloader:
     def download(self, itag: int, output_path: str, filename: Optional[str] = None,
                  progress_cb: Optional[Callable[[int, int], None]] = None) -> str:
         """Download a single stream by its itag."""
-        yt = YouTube(self.url, on_progress_callback=progress_cb)
+        yt = YouTube(self.url, on_progress_callback=progress_cb, client=self.client)
         stream = yt.streams.get_by_itag(itag)
         if stream is None:
             raise ValueError(f"Stream with itag {itag} not found.")
@@ -97,7 +103,7 @@ class YouTubeDownloader:
 
     def download_audio_only(self, output_path: str, filename: Optional[str] = None,
                           progress_cb: Optional[Callable[[int, int], None]] = None) -> str:
-        yt = YouTube(self.url, on_progress_callback=progress_cb)
+        yt = YouTube(self.url, on_progress_callback=progress_cb, client=self.client)
         audio_streams = list(yt.streams.filter(only_audio=True))
         if not audio_streams:
             raise ValueError("No audio-only streams available.")
