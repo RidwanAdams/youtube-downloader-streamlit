@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import subprocess
-from pytubefix import YouTube
 from src.downloader import YouTubeDownloader, StreamOption
 
 
@@ -45,31 +44,37 @@ def main():
     # URL Input
     url = st.text_input("🔗 Enter YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
     
-    if url:
+    # Add Fetch button under the placeholder
+    fetch_button = st.button("🔍 Fetch Video Info", use_container_width=True)
+
+    if url or fetch_button:
+        if not url:
+            st.warning("Please enter a URL first.")
+            return
+
         try:
             # Initialize downloader
             downloader = YouTubeDownloader(url)
             
-            # Fetch streams
+            # Fetch info & streams
             with st.spinner("Fetching video information..."):
+                info = downloader.fetch_info()
                 streams = downloader.fetch_streams()
             
             if not streams:
                 st.error("No streams available for this video.")
                 return
             
-            # Get video info
-            yt = YouTube(url)
-            
             # Display video thumbnail and info
             col1, col2 = st.columns([1, 2])
             with col1:
-                st.image(yt.thumbnail_url, width=200)
+                st.image(info.get('thumbnail'), width=200)
             with col2:
-                st.subheader(yt.title)
-                st.write(f"**Author:** {yt.author}")
-                st.write(f"**Duration:** {yt.length // 60}:{yt.length % 60:02d}")
-                st.write(f"**Views:** {yt.views:,}")
+                st.subheader(info.get('title'))
+                st.write(f"**Author:** {info.get('uploader')}")
+                duration = info.get('duration', 0)
+                st.write(f"**Duration:** {duration // 60}:{duration % 60:02d}")
+                st.write(f"**Views:** {info.get('view_count', 0):,}")
             
             st.divider()
             
@@ -109,36 +114,30 @@ def main():
                         st.error("No suitable stream found for the selected resolution.")
                         return
                     
-                    # Progress bar
-                    progress_bar = st.progress(0)
+                    # Progress indication
                     status_text = st.empty()
-                    
-                    # Download function with progress
-                    def on_progress(stream, chunk, bytes_remaining):
-                        total_size = stream.filesize
-                        downloaded = total_size - bytes_remaining
-                        percent = int((downloaded / total_size) * 100)
-                        progress_bar.progress(percent)
-                        status_text.text(f"Downloading... {percent}%")
+                    status_text.text("⏳ Downloading to server... This may take a moment.")
+                    progress_bar = st.progress(0.05)
                     
                     # Perform download to a temporary location
-                    status_text.text("Starting download...")
                     temp_dir = "temp_downloads"
                     os.makedirs(temp_dir, exist_ok=True)
                     
                     if download_type == "Video":
                         file_path = downloader.download(
                             chosen_stream.itag,
-                            output_path=temp_dir,
-                            progress_cb=on_progress
+                            output_path=temp_dir
                         )
                     else:
                         file_path = downloader.download_audio_only(
-                            output_path=temp_dir,
-                            progress_cb=on_progress
+                            output_path=temp_dir
                         )
                     
-                    progress_bar.progress(100)
+                    if not file_path or not os.path.exists(file_path):
+                        st.error("Failed to retrieve file from server.")
+                        return
+
+                    progress_bar.progress(1.0)
                     status_text.text("✅ Downloaded to server. Ready for browser download!")
                     
                     # Read the file and provide download button
@@ -149,7 +148,7 @@ def main():
                         label="📥 Click here to save to your device",
                         data=file_data,
                         file_name=os.path.basename(file_path),
-                        mime=chosen_stream.mime_type if download_type == "Video" else "audio/mpeg",
+                        mime="video/mp4" if download_type == "Video" else "audio/mpeg",
                         use_container_width=True
                     )
                     

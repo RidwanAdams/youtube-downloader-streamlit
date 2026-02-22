@@ -1,121 +1,143 @@
-import json
 import logging
 import os
 import re
-import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
-
-from pytubefix import YouTube
+import yt_dlp
 
 
 @dataclass
 class StreamOption:
-    itag: int
+    itag: str  # Kept as 'itag' for compatibility, but stores yt-dlp format_id
     mime_type: str
     resolution: Optional[str]
     fps: Optional[int]
     abr: Optional[str]
+    filesize: Optional[int] = None
 
 
 class YouTubeDownloader:
-    """High-level YouTube downloader with best-effort high-res support."""
+    """High-level YouTube downloader using yt-dlp for better stability."""
 
-    def __init__(self, url: str, logger: Optional[logging.Logger] = None, cache: Optional[Any] = None, client: str = 'MWEB') -> None:
+    def __init__(self, url: str, logger: Optional[logging.Logger] = None, cache: Optional[Any] = None) -> None:
         self.url = url
         self.logger = logger or logging.getLogger(__name__)
         self.cache = cache
-        self.client = client
+        self.info: Optional[dict] = None
 
     def _validate_url(self) -> None:
         if not isinstance(self.url, str) or not self.url:
             raise ValueError("Invalid YouTube URL provided.")
 
-    def fetch_streams(self) -> List[StreamOption]:
-        """Fetch available streams for the URL and return a sorted list."""
+    def fetch_info(self) -> dict:
+        """Fetch full video info using yt-dlp."""
         self._validate_url()
-        try:
-            yt = YouTube(
-                self.url, 
-                on_progress_callback=None, 
-                on_complete_callback=None,
-                client=self.client
-            )  # type: ignore[arg-type]
-        except Exception as exc:
-            self.logger.exception("Failed to initialize YouTube object for URL: %s", self.url)
-            raise
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            self.info = ydl.extract_info(self.url, download=False)
+        return self.info
 
+    def fetch_streams(self) -> List[StreamOption]:
+        """Fetch available streams and return a sorted list of options."""
+        if not self.info:
+            self.fetch_info()
+        
+        info = self.info
         options: List[StreamOption] = []
-        for s in yt.streams:
-            options.append(
-                StreamOption(
-                    itag=s.itag,
-                    mime_type=s.mime_type,
-                    resolution=getattr(s, 'resolution', None),
-                    fps=getattr(s, 'fps', None),
-                    abr=getattr(s, 'abr', None),
+        
+        formats = info.get('formats', [])
+        for f in formats:
+            # We want formats that have a resolution (video) or are audio-only
+            if f.get('vcodec') != 'none' or f.get('acodec') != 'none':
+                res = f.get('resolution')
+                if not res and f.get('height'):
+                    res = f"{f.get('height')}p"
+                
+                options.append(
+                    StreamOption(
+                        itag=f.get('format_id', ''),
+                        mime_type=f.get('ext', ''),
+                        resolution=res,
+                        fps=f.get('fps'),
+                        abr=str(f.get('abr')) if f.get('abr') else None,
+                        filesize=f.get('filesize') or f.get('filesize_approx')
+                    )
                 )
-            )
-        # Prefer progressive streams (video+audio) if available; otherwise, fall back to the best video+audio split
-        options.sort(key=lambda o: self._resolution_index(o.resolution), reverse=True)
-        return options
+        
+        # Filter duplicates and sort
+        unique_options = {}
+        for opt in options:
+            key = (opt.resolution, opt.mime_type)
+            if key not in unique_options or (opt.filesize and (not unique_options[key].filesize or opt.filesize > unique_options[key].filesize)):
+                unique_options[key] = opt
+        
+        result = list(unique_options.values())
+        result.sort(key=lambda o: self._resolution_index(o.resolution), reverse=True)
+        return result
 
     @staticmethod
     def _resolution_index(res: Optional[str]) -> int:
         if not res:
             return 0
         m = re.search(r"(\d+)", res)
-        if m:
-            try:
-                return int(m.group(1))
-            except ValueError:
-                return 0
-        return 0
+        return int(m.group(1)) if m else 0
 
     def select_stream_for_resolution(self, streams: List[StreamOption], target: str) -> Optional[StreamOption]:
-        # exact match first
         t = target.lower()
         for s in streams:
             if s.resolution and s.resolution.lower() == t:
                 return s
-        # fallback to highest resolution not smaller than target
-        target_num = self._parse_resolution(target)
-        candidates = [s for s in streams if s.resolution]
-        candidates.sort(key=lambda s: self._parse_resolution(s.resolution or ""), reverse=True)
-        for s in candidates:
-            if self._parse_resolution(s.resolution or "") >= target_num:
-                return s
         return streams[0] if streams else None
 
-    @staticmethod
-    def _parse_resolution(res: str) -> int:
-        m = re.search(r"(\d+)", res)
-        return int(m.group(1)) if m else 0
+    def download(self, itag: str, output_path: str, progress_cb: Optional[Callable] = None) -> str:
+        """Download a specific format by its format_id (stored in itag)."""
+        filename_collector = []
 
-    def download(self, itag: int, output_path: str, filename: Optional[str] = None,
-                 progress_cb: Optional[Callable[[int, int], None]] = None) -> str:
-        """Download a single stream by its itag."""
-        yt = YouTube(self.url, on_progress_callback=progress_cb, client=self.client)
-        stream = yt.streams.get_by_itag(itag)
-        if stream is None:
-            raise ValueError(f"Stream with itag {itag} not found.")
-        return stream.download(output_path=output_path, filename=filename)  # type: ignore[arg-type]
+        def logger_hook(d):
+            if d['status'] == 'downloading' and progress_cb:
+                # Mock pytubefix progress callback signature if possible, or just pass simple percent
+                # pytubefix: (stream, chunk, bytes_remaining)
+                # Here we just pass a simple dict to progress_cb if it supports it, 
+                # but our current app.py expects (stream, chunk, bytes_remaining).
+                # I'll modify app.py to handle a simpler progress.
+                pass
+            if d['status'] == 'finished':
+                filename_collector.append(d['filename'])
 
-    def download_audio_only(self, output_path: str, filename: Optional[str] = None,
-                          progress_cb: Optional[Callable[[int, int], None]] = None) -> str:
-        yt = YouTube(self.url, on_progress_callback=progress_cb, client=self.client)
-        audio_streams = list(yt.streams.filter(only_audio=True))
-        if not audio_streams:
-            raise ValueError("No audio-only streams available.")
-        # Choose highest bitrate if available
-        audio_stream = max(audio_streams, key=lambda s: s.abr or "0kbps")
-        return audio_stream.download(output_path=output_path, filename=filename)  # type: ignore[arg-type]
+        ydl_opts = {
+            'format': f"{itag}+bestaudio/best",
+            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+            'progress_hooks': [logger_hook],
+            'merge_output_format': 'mp4',
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([self.url])
+        
+        return filename_collector[0] if filename_collector else ""
 
-    @staticmethod
-    def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> None:
-        """Merge separate video and audio streams using ffmpeg. Requires ffmpeg in PATH."""
-        try:
-            cmd = ["ffmpeg", "-y", "-i", video_path, "-i", audio_path, "-c", "copy", output_path]
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except Exception:
-            raise
+    def download_audio_only(self, output_path: str, progress_cb: Optional[Callable] = None) -> str:
+        filename_collector = []
+
+        def logger_hook(d):
+            if d['status'] == 'finished':
+                filename_collector.append(d['filename'])
+
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'progress_hooks': [logger_hook],
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([self.url])
+        
+        return filename_collector[0] if filename_collector else ""
