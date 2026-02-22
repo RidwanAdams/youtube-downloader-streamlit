@@ -35,6 +35,14 @@ class YouTubeDownloader:
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                }
+            },
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36',
+            },
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             self.info = ydl.extract_info(self.url, download=False)
@@ -98,11 +106,6 @@ class YouTubeDownloader:
 
         def logger_hook(d):
             if d['status'] == 'downloading' and progress_cb:
-                # Mock pytubefix progress callback signature if possible, or just pass simple percent
-                # pytubefix: (stream, chunk, bytes_remaining)
-                # Here we just pass a simple dict to progress_cb if it supports it, 
-                # but our current app.py expects (stream, chunk, bytes_remaining).
-                # I'll modify app.py to handle a simpler progress.
                 pass
             if d['status'] == 'finished':
                 filename_collector.append(d['filename'])
@@ -112,6 +115,14 @@ class YouTubeDownloader:
             'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
             'progress_hooks': [logger_hook],
             'merge_output_format': 'mp4',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                }
+            },
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36',
+            },
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -135,6 +146,14 @@ class YouTubeDownloader:
                 'preferredquality': '192',
             }],
             'progress_hooks': [logger_hook],
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                }
+            },
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36',
+            },
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

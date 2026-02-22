@@ -114,10 +114,10 @@ def main():
                         st.error("No suitable stream found for the selected resolution.")
                         return
                     
-                    # Progress indication
+            # Progress indication
                     status_text = st.empty()
-                    status_text.text("⏳ Downloading to server... This may take a moment.")
-                    progress_bar = st.progress(0.05)
+                    status_text.text("⏳ Downloading... This may take a while for large videos.")
+                    progress_bar = st.progress(0.1)
                     
                     # Perform download to a temporary location
                     temp_dir = "temp_downloads"
